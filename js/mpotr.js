@@ -1,4 +1,8 @@
 var mpotr = (function(){
+  var hash = function(str) {
+
+  },
+
   /** @scope mpotr **/
   return {
     /**
@@ -17,11 +21,6 @@ var mpotr = (function(){
       return res;
     },
 
-
-
-    authUser: function() {
-        return null;
-    }
 
   }
 })();
@@ -67,13 +66,12 @@ Participant.prototype = {
     this.ephPublicKey = ecdsaGenPublicKey(this.ephPrivateKey);
   },
 
-
   sendProtocolMessage: function(id) {
     switch(id) {
       case 'randomX':
         return {'*': {'publicKey':this.publicKey, 'randomX': gen(16,1,0)}};
 
-      case 'akePub':
+      case 'ake1':
         result = {};
         for (var i in nicks){
 
@@ -150,6 +148,8 @@ p3 = ecDH(r1, p2);
 p4 = ecDH(r2, p1);
 console.log(p3);
 console.log(p4);
+
+k = hash(s + '');
 
 var Alice = new Participant();
 Alice.initialize('alice');

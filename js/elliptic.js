@@ -392,16 +392,16 @@ function ecdsaVerify(publicKey, signature, message) {
         return equals(point4[0], r);
 }
 
-function ecDH(key, pub) {
-	prikey = privateKeyFromString(key);
+function ecDH(x, gY) {
+	x = privateKeyFromString(x);
 
-	if (typeof pub == "undefined") {
-		pubkey = scalarMultP256(p256Gx, p256Gy, prikey);
-		return publicKeyToString(pubkey);
+	if (typeof gY == "undefined") {
+		gX = scalarMultP256(p256Gx, p256Gy, x);
+		return publicKeyToString(gX);
 	}
 	else {
-    pub = publicKeyFromString(pub);
-		r = scalarMultP256(pub[0], pub[1], prikey);
+        gX = publicKeyFromString(gX);
+		r = scalarMultP256(gy[0], gy[1], prikey);
 		return publicKeyToString(r);
 	}
 }
