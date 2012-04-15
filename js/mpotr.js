@@ -8,6 +8,29 @@ window.console = {
   }
 }
 */
+
+document.addEventListener("DOMContentLoaded", function() {
+
+
+function debugLog(name, value) {
+    var debug = document.getElementById("debug_content");
+    var div = document.createElement("div")
+    div.id = "line";
+    var el = document.createElement("span");
+    el.textContent = name;
+    el.id = "debug_name";
+
+    var el2 = document.createElement("span");
+    el2.textContent = value;
+    el2.id = "debug_value";
+    div.appendChild(el);
+    div.appendChild(el2);
+
+    debug.appendChild(div);
+
+};
+
+
 var mpotr = (function(){
 
   /** @scope mpotr **/
@@ -50,6 +73,16 @@ var mpotr = (function(){
 
     verify_mac: function(mac, m, k) {
       return this.mac(m, k) === mac;
+    },
+
+    base64Xor: function(x1, x2){
+      x1b = Crypto.util.base64ToBytes(x1);
+      x2b = Crypto.util.base64ToBytes(x2);
+
+      for (var i = 0; i < x1b.length; i++){
+        x1b[i] ^= x2b[i];
+      }
+      return Crypto.util.bytesToBase64(x1b);
     }
 
   }
@@ -83,8 +116,6 @@ function Participant() {
 Participant.prototype = {
   initialize: function(nick, static_private_key) {
     this.nick = nick
-    // XXX replace with a real key..
-    this.sessionKey = mpotr.hash('sux', 128)
 
     Crypto.util.bytesToBase64(Crypto.charenc.UTF8.stringToBytes('thisissecretz'));
 
@@ -181,6 +212,36 @@ Participant.prototype = {
 
         return result;
 
+      case 'gke1':
+        var result = {};
+        this.gkeX = {};
+        for (var i in this.nicks){
+          //don't send to yourself
+          if (this.nicks[i] == this.nick){
+            continue;
+          }
+          this.gkeX[this.nicks[i]] = ecdsaGenPrivateKey();
+          var gX = ecDH(this.gkeX[this.nicks[i]]);
+          result[this.nicks[i]] = {'gX': gX, 'sig': ecdsaSign(this.ephPrivateKey, gX)};
+        }
+
+        return result;
+
+      case 'gke2':
+        var result = {};
+
+        this.gkeK = Crypto.util.bytesToBase64(Crypto.util.randomBytes(16));
+
+        for (var i in this.nicks){
+          //don't send to yourself
+          if (this.nicks[i] == this.nick){
+            continue;
+          }
+          var mask = mpotr.hash(this.gkeGXY[this.nicks[i]], 128);
+          result[this.nicks[i]] = mpotr.base64Xor(this.gkeK, mask);
+        }
+
+        return result;
 
     }
 
@@ -192,7 +253,7 @@ Participant.prototype = {
      [<SESSION_ID>, <CIPHER_TEXT>, <SIGNATURE>]
 
      <SIGNATURE> = SIGN([<SESSION_ID>, <CIPHER_TEXT>])
-     <CIPHER_TEXT> = {'nick': <NICKNAME>, 'msg': <MESSAGE>}
+     <CIPHER_TEXT> = ENCRYPT({'nick': <NICKNAME>, 'msg': <MESSAGE>})
   */
   authSend: function(data) {
     var message = {
@@ -246,6 +307,8 @@ Participant.prototype = {
         }
         this.sessionID = mpotr.deriveSessionID(this.nicks, this.randomXs);
         console.log("Generated sessionID: " + this.sessionID);
+
+        debugLog("randomX "+this.nick, "Generated sessionID "+this.sessionID);
         return this.sessionID;
       case 'ake':
         this.akeGXY = {};
@@ -275,6 +338,8 @@ Participant.prototype = {
 
           var plaintext = mpotr.decrypt(msgs[i].ciphertext, this.authUserEncKey[i]);
           plaintext = JSON.parse(plaintext);
+
+          debugLog("authUser1 "+this.nick, plaintext);
           console.log(plaintext);
           this.ephPublicKeys[i] = plaintext[0];
 
@@ -314,6 +379,35 @@ Participant.prototype = {
       case 'groupKey':
 
       case 'authSend':
+
+        return 0;
+
+      case 'gke1':
+        this.gkeGXY = {};
+
+        for (var i in msgs){
+          if (!ecdsaVerify(this.ephPublicKeys[i], msgs[i]['sig'], msgs[i]['gX'])){
+            //die?
+            this.protocolError('gke1', 'signature from ' + i + ' failed');
+            return;
+          }
+          this.gkeGXY[i] = ecDH(this.gkeX[i], msgs[i]['gX']);
+
+        }
+        return 0;
+
+      case 'gke2':
+
+        var base = this.gkeK;
+        for (var i in msgs){
+          var mask = mpotr.hash(this.gkeGXY[i], 128);
+          var next = mpotr.base64Xor(mask, msgs[i]);
+          base = mpotr.base64Xor(next, base);
+        }
+
+        this.sessionKey = base;
+
+        //console.log(this.nick + ' derived session key ' + this.sessionKey);
 
         return 0;
 
@@ -379,26 +473,35 @@ Charlie.initialize('charlie');
 var participants = [Alice, Bob, Charlie];
 
 
-var messages = ['randomX', 'ake', 'authUser1', 'authUser2'];
+var messages = ['randomX', 'ake', 'authUser1', 'authUser2', 'gke1', 'gke2'];
 for (var mid in messages) {
+
+  console.log("-----");
+  console.log("Sending "+ messages[mid] +" messages");
+  console.log("-----");
+  debugLog("----SENDING---", messages[mid]);
   for (var i in participants) {
     var id = messages[mid];
     var participant = participants[i];
     res = participant.sendProtocolMessage(id);
     TestServer.send(id, res, participants[i].nick);
     console.log("Principal "+ participants[i].nick +" sent message " + id + ": " + JSON.stringify(res));
+    debugLog(participants[i].nick +" sent message " + id, JSON.stringify(res));
+
   }
 
 
   console.log("-----");
-  console.log("Processing "+ id +" messages");
+  console.log("Processing "+ messages[mid] +" messages");
   console.log("-----");
 
+  debugLog("----PROCESSING---", messages[mid]);
   for (var i in participants) {
     var current_messages = TestServer.getMessages(id, participants[i].nick);
 
     console.log("Principal "+ participants[i].nick +" received: " + JSON.stringify(current_messages));
 
+    debugLog(participants[i].nick +" sent message " + id, JSON.stringify(current_messages));
     var id = messages[mid];
     var participant = participants[i];
     res = participant.processProtocolMessages(id, current_messages);
@@ -407,10 +510,8 @@ for (var mid in messages) {
 }
 
 var enc_msg = Alice.authSend("hello world");
-console.log("Alice: "+enc_msg);
-console.log("Decrypt: ");
-console.log(Alice.authRecv(enc_msg).msg);
-
+debugLog("encrypted message (alice)", JSON.stringify(enc_msg));
+debugLog("decrypted message (alice)", Alice.authRecv(enc_msg).msg);
 
 TestServer.send(id, res, participant);
 
@@ -437,4 +538,6 @@ TestServer.send(id, res, participant);
     //postToServer(
 
 **************/
+
+});
 
