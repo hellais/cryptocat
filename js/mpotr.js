@@ -1,7 +1,14 @@
+/*
+window.console = {
+  log: function(data) {
+    var content = document.getElementById("content");
+    var el = document.createElement("p")
+    el.textContent = data;
+    content.appendChild(el);
+  }
+}
+*/
 var mpotr = (function(){
-  var hash = function(str) {
-
-  },
 
   /** @scope mpotr **/
   return {
@@ -31,6 +38,10 @@ var mpotr = (function(){
 
     decrypt: function(m, k) {
       return Crypto.AES.decrypt(m, Crypto.util.base64ToBytes(k));
+    },
+
+    sign: function(m, k) {
+      return ecdsaSign(k, m);
     },
 
     mac: function(m, k) {
@@ -65,12 +76,17 @@ function Participant() {
   this.ephPublicKey;
   this.privateKey;
   this.ephPrivateKey;
+  this.sessionKey;
 
 };
 
 Participant.prototype = {
   initialize: function(nick, static_private_key) {
     this.nick = nick
+    // XXX replace with a real key..
+    this.sessionKey = mpotr.hash('sux', 128)
+
+    Crypto.util.bytesToBase64(Crypto.charenc.UTF8.stringToBytes('thisissecretz'));
 
     //generate a long-term public key if one doesn't exist
     if (!static_private_key) {
@@ -87,6 +103,10 @@ Participant.prototype = {
 
   protocolError: function(id, errorMessage) {
     console.log('Error in protocol step ' + id + ' for ' + this.nick + ': ' + errorMessage);
+  },
+
+  Error: function(id, errorMessage) {
+    console.log('Error in ' + id + ' for ' + this.nick + ': ' + errorMessage);
   },
 
   sendProtocolMessage: function(id) {
@@ -148,6 +168,7 @@ Participant.prototype = {
           console.log(this.authUserEncKey[this.nicks[i]]);
           console.log(JSON.stringify(this.authUserEncKey));
           console.log(this.nicks[i]);
+
           var ciphertext = mpotr.encrypt(message, this.authUserEncKey[this.nicks[i]]);
 
           var mac = mpotr.mac(ciphertext, this.authUserMacKey[this.nicks[i]]);
@@ -162,6 +183,52 @@ Participant.prototype = {
 
 
     }
+
+  },
+
+  /* Returns a signed and encrypted message to
+     be broadcasted to the wire.
+     The format for the message is JSON:
+     [<SESSION_ID>, <CIPHER_TEXT>, <SIGNATURE>]
+
+     <SIGNATURE> = SIGN([<SESSION_ID>, <CIPHER_TEXT>])
+     <CIPHER_TEXT> = {'nick': <NICKNAME>, 'msg': <MESSAGE>}
+  */
+  authSend: function(data) {
+    var message = {
+            'nick': this.nick,
+            'msg': data
+          };
+
+    console.log(message);
+    console.log(this.sessionKey);
+
+    var ciphertext = mpotr.encrypt(JSON.stringify(message), this.sessionKey);
+    var signature = mpotr.sign(JSON.stringify([this.sessionID, ciphertext]), this.privateKey);
+    return JSON.stringify([this.sessionID, ciphertext, signature])
+
+  },
+
+  authRecv: function(data) {
+    var message = JSON.parse(data);
+    var sessionID = message[0];
+    var ciphertext = message[1];
+    var signature = message[2];
+
+    if (sessionID != this.sessionID) {
+      this.Error('authRecv', 'sessionID of message does not match');
+      return;
+    }
+
+    var cleartext = mpotr.decrypt(ciphertext, this.sessionKey);
+    var to_verify = JSON.stringify([this.sessionID, ciphertext]);
+    var parsed_ct = JSON.parse(cleartext);
+
+    if (!ecdsaVerify(this.publicKeys[parsed_ct.nick], signature, to_verify)){
+      this.Error('authRecv', 'message verification failed');
+    }
+
+    return parsed_ct;
 
   },
 
@@ -243,7 +310,13 @@ Participant.prototype = {
           }
 
         }
+
+      case 'groupKey':
+
+      case 'authSend':
+
         return 0;
+
     }
 
   }
@@ -297,8 +370,6 @@ p4 = ecDH(r2, p1);
 //console.log(p4);
 //console.log(Whirlpool(p3));
 
-k = hash(s + '');
-
 var Alice = new Participant();
 Alice.initialize('alice');
 var Bob = new Participant();
@@ -334,6 +405,12 @@ for (var mid in messages) {
   }
 
 }
+
+var enc_msg = Alice.authSend("hello world");
+console.log("Alice: "+enc_msg);
+console.log("Decrypt: ");
+console.log(Alice.authRecv(enc_msg).msg);
+
 
 TestServer.send(id, res, participant);
 
