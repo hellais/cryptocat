@@ -27,7 +27,7 @@ function debugLog(name, value) {
     div.appendChild(el2);
 
     debug.appendChild(div);
-
+    return true;
 };
 
 
@@ -110,12 +110,14 @@ function Participant() {
   this.privateKey;
   this.ephPrivateKey;
   this.sessionKey;
-
+  this.outstanding;
+  this.outstanding_nicks;
 };
 
 Participant.prototype = {
   initialize: function(nick, static_private_key) {
     this.nick = nick
+    this.outstanding = true;
 
     Crypto.util.bytesToBase64(Crypto.charenc.UTF8.stringToBytes('thisissecretz'));
 
@@ -183,8 +185,8 @@ Participant.prototype = {
           };
 
         }
-
         return result;
+
       case 'authUser2':
         var result = {};
 
@@ -243,6 +245,24 @@ Participant.prototype = {
 
         return result;
 
+      case 'attest':
+        var result = {};
+        var params = {'version': 1, 'timeout': 18000 };
+        var attest_msg = mpotr.hash(JSON.stringify([this.sessionID, params]));
+        this.outstanding_nicks = this.nicks;
+        for (var i in this.nicks){
+          //don't send to yourself
+          if (this.nicks[i] == this.nick){
+            continue;
+          }
+          var message = this.authSend(attest_msg);
+
+          result[this.nicks[i]] = this.authSend(message);
+
+        }
+        return result;
+
+
     }
 
   },
@@ -266,7 +286,7 @@ Participant.prototype = {
 
     var ciphertext = mpotr.encrypt(JSON.stringify(message), this.sessionKey);
     var signature = mpotr.sign(JSON.stringify([this.sessionID, ciphertext]), this.privateKey);
-    return JSON.stringify([this.sessionID, ciphertext, signature])
+    return [this.sessionID, ciphertext, signature]
 
   },
 
@@ -354,6 +374,7 @@ Participant.prototype = {
 
         }
         return 0;
+
       case 'authUser2':
 
         for (var i in msgs){
@@ -375,12 +396,25 @@ Participant.prototype = {
           }
 
         }
+        return;
 
-      case 'groupKey':
+      case 'attest':
+        // XXX This function needs quite some refactoring..
+        //
+        if (this.outstanding_nicks.length == 0) {
+          this.outstanding = false;
+        }
+        for (var i in msgs) {
+          if (this.outstanding_nicks.length == 0) {
+            this.outstanding = false;
+          }
+          console.log('bla...');
+          console.log(msgs[i]);
+          var attest = this.authRecv(JSON.stringify(msgs[i]));
+          this.outstanding_nicks.pop(attest);
+        }
 
-      case 'authSend':
-
-        return 0;
+        return;
 
       case 'gke1':
         this.gkeGXY = {};
@@ -431,11 +465,11 @@ var TestServer = {
         this.state[id][i] = {};
       }
       this.state[id][i][nick] = msgs[i];
-      //console.log(nick);
-      //console.log(id);
-      //console.log(i);
-      //console.log(msgs[i]);
-      //console.log(JSON.stringify(this.state[id][i]));
+      console.log(nick);
+      console.log(id);
+      console.log(i);
+      console.log(msgs[i]);
+      console.log(JSON.stringify(this.state[id][i]));
 
     }
   },
@@ -473,7 +507,7 @@ Charlie.initialize('charlie');
 var participants = [Alice, Bob, Charlie];
 
 
-var messages = ['randomX', 'ake', 'authUser1', 'authUser2', 'gke1', 'gke2'];
+var messages = ['randomX', 'ake', 'authUser1', 'authUser2', 'gke1', 'gke2', 'attest'];
 for (var mid in messages) {
 
   console.log("-----");
@@ -509,9 +543,19 @@ for (var mid in messages) {
 
 }
 
-var enc_msg = Alice.authSend("hello world");
-debugLog("encrypted message (alice)", JSON.stringify(enc_msg));
-debugLog("decrypted message (alice)", Alice.authRecv(enc_msg).msg);
+var enc_msg = JSON.stringify(Alice.authSend("hello peeps"));
+debugLog("encrypted message (ALICE)", JSON.stringify(enc_msg));
+debugLog("decrypted message (ALICE)", Alice.authRecv(enc_msg).msg);
+
+
+var enc_msg = JSON.stringify(Bob.authSend("Hello Alice, I verified that the message is from you!"));
+debugLog("encrypted message (BOB)", JSON.stringify(enc_msg));
+debugLog("decrypted message (BOB)", Bob.authRecv(enc_msg).msg);
+
+var enc_msg = JSON.stringify(Charlie.authSend("Hello all, it's very nice to see you :)"));
+debugLog("encrypted message (CHARLIE)", JSON.stringify(enc_msg));
+debugLog("decrypted message (CHARLIE)", Charlie.authRecv(enc_msg).msg);
+
 
 TestServer.send(id, res, participant);
 
